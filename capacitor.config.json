@@ -1,0 +1,8 @@
+{
+  "appId": "io.studylab.wsethwallet",
+  "appName": "Hanan Wallet",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  }
+}
