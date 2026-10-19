@@ -37,6 +37,9 @@ const net = () => settings.network;
 const badge = () => (net().chainId === 1n ? '<span class="tag main">MAINNET</span>' : '<span class="tag">TESTNET</span>');
 const sym = (t: Token | null) => (t ? t.symbol : net().nativeSymbol);
 const lookalikeBadge = (t: Token) => (isLookalike(t) ? ` <span class="bad">⚠ lookalike</span>` : '');
+const APP_LINK = 'https://transrock14-hub.github.io/hanan-wallet/';
+let ethUsd: number | null = null;
+
 const timeAgo = (t: number) => {
   const s = Math.round((Date.now() - t) / 1000);
   return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(t).toLocaleDateString();
@@ -297,6 +300,7 @@ function renderDash() {
     <section class="hero">
       <div class="muted">Balance · ${esc(net().name)}</div>
       <div class="amount">${fmt(bal)}<span class="unit">${esc(net().nativeSymbol)}</span></div>
+      ${usdLine(bal)}
       <button class="addr-chip" id="copy">${short(addr)} · Copy</button>
     </section>
     <div class="actions">
@@ -641,13 +645,37 @@ async function settlePending() {
   }
 }
 
+function usdLine(bal: string | null) {
+  if (net().chainId !== 1n || ethUsd == null || bal == null) return '';
+  const n = Number(bal);
+  if (!Number.isFinite(n)) return '';
+  return `<div class="muted">≈ $${(n * ethUsd).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>`;
+}
+
+async function refreshPrice() {
+  if (net().chainId !== 1n) {
+    ethUsd = null;
+    return;
+  }
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
+    if (!res.ok) return;
+    const data = (await res.json()) as { ethereum?: { usd?: number } };
+    ethUsd = data.ethereum?.usd ?? null;
+  } catch {
+    /* The balance still shows without a dollar price. */
+  }
+}
+
 async function refresh() {
+  const price = refreshPrice();
   try {
     state.holdings = await w.balances();
     await settlePending();
   } catch (e) {
     setMsg('err', w.explain(e));
   }
+  await price;
   try {
     state.incoming = await w.incomingActivity(w.address());
   } catch {
@@ -781,6 +809,7 @@ function renderSettings() {
     </div>
     <div class="card stack">
       <h2>Wallet</h2>
+      <button class="full secondary" id="shareApp">Copy app link for a friend</button>
       <button class="full secondary" id="reveal">Show recovery phrase</button>
       <button class="full danger" id="del">Delete wallet from this phone</button>
     </div>`;
@@ -886,6 +915,10 @@ function renderSettings() {
   };
   $('#saveRpc').onclick = () => changeRpc(val('#rpc'));
   $('#resetRpc').onclick = () => changeRpc(null);
+  $('#shareApp').onclick = async () => {
+    await copy(APP_LINK, 'App link');
+    renderSettings();
+  };
   $('#reveal').onclick = async () => {
     if (!(await askConfirm('Show your recovery phrase? Make sure nobody can see your screen.'))) return;
     renderBackup(await w.revealPhrase(), false);

@@ -341,7 +341,7 @@ export function explain(e: unknown): string {
   const sym = settings.network.nativeSymbol;
   if (err?.code === 'INSUFFICIENT_FUNDS') return `Not enough ${sym} to pay for this and its network fee.`;
   if (err?.code === 'NETWORK_ERROR' || err?.code === 'TIMEOUT' || err?.code === 'SERVER_ERROR') {
-    if (settings.network.chainId === 31337n) return 'Could not reach Anvil. On your computer, run ./start-anvil.sh in the ETH Practice folder, then try again.';
+    if (settings.network.chainId === 31337n) return 'Could not reach Anvil. If it has been idle, wait about a minute and try again.';
     return `Could not reach ${settings.network.name}. Check your internet connection.`;
   }
   if (err?.code === 'CALL_EXCEPTION') return `The contract rejected this${err.reason ? ` (${err.reason})` : ''}. Check you have enough of the token.`;
