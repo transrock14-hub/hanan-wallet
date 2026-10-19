@@ -119,6 +119,20 @@ export const NETWORKS: Network[] = [
         decimals: 6,
         source: 'Circle USDC on Ethereum.',
       },
+      {
+        address: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+        name: 'Tether USD',
+        symbol: 'USDT',
+        decimals: 6,
+        source: 'Tether USDT on Ethereum.',
+      },
+      {
+        address: '0x6B175474E89094C44Da98b954EedeAC495271d0F',
+        name: 'Dai Stablecoin',
+        symbol: 'DAI',
+        decimals: 18,
+        source: 'MakerDAO DAI on Ethereum.',
+      },
     ],
   },
 ];

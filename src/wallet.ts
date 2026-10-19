@@ -28,6 +28,11 @@ const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function transfer(address to, uint256 value) returns (bool)',
 ];
+const LEGACY_ERC20_ABI = [
+  'function name() view returns (bytes32)',
+  'function symbol() view returns (bytes32)',
+  'function decimals() view returns (uint256)',
+];
 
 let provider: JsonRpcProvider | null = null;
 let signer: HDNodeWallet | null = null;
@@ -119,16 +124,35 @@ function requireSigner() {
 export const wsethToken = (): Token | null =>
   settings.wsethAddress ? { address: settings.wsethAddress, name: 'Wrapped Study Ether', symbol: 'WSETH', decimals: 18 } : null;
 
+function textFromBytes32(v: string) {
+  const hex = v.startsWith('0x') ? v.slice(2) : v;
+  const bytes: number[] = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    const n = parseInt(hex.slice(i, i + 2), 16);
+    if (!n) break;
+    bytes.push(n);
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes)).trim();
+}
+
 /** Reads a token's details from the chain, so names and symbols always come from the contract itself. */
 export async function readToken(addr: string): Promise<Token> {
   const a = toAddress(addr, 'Token address');
   if ((await provider!.getCode(a)) === '0x') throw new Error(`No contract at that address on ${settings.network.name}.`);
+  const known = settings.network.presets.find((p) => p.address.toLowerCase() === a.toLowerCase());
+  if (known) return { address: a, name: known.name, symbol: known.symbol, decimals: known.decimals };
   const c = new Contract(a, ERC20_ABI, provider);
   try {
     const [name, symbol, decimals] = await Promise.all([c.name(), c.symbol(), c.decimals()]);
     return { address: a, name, symbol, decimals: Number(decimals) };
   } catch {
-    throw new Error('That contract is not a standard ERC-20 token.');
+    try {
+      const legacy = new Contract(a, LEGACY_ERC20_ABI, provider);
+      const [name, symbol, decimals] = await Promise.all([legacy.name(), legacy.symbol(), legacy.decimals()]);
+      return { address: a, name: textFromBytes32(String(name)), symbol: textFromBytes32(String(symbol)), decimals: Number(decimals) };
+    } catch {
+      throw new Error('That contract is not a standard ERC-20 token.');
+    }
   }
 }
 
@@ -187,6 +211,21 @@ function toAddress(v: string, what = 'Recipient') {
   return getAddress(v.trim());
 }
 
+/** Accepts a 0x address or a name such as vitalik.eth. */
+export async function resolveRecipient(input: string): Promise<string> {
+  const v = input.trim();
+  if ((isAddress as (value: string) => boolean)(v)) return getAddress(v);
+  if (!provider || !v.includes('.')) throw new Error('Recipient is not a valid 0x address.');
+  let addr: string | null = null;
+  try {
+    addr = await provider.resolveName(v);
+  } catch {
+    throw new Error('Could not look up that name.');
+  }
+  if (!addr) throw new Error(`No address found for ${v}.`);
+  return getAddress(addr);
+}
+
 function toUnits(amount: string, decimals: number) {
   let v: bigint;
   try {
@@ -202,9 +241,9 @@ const wsethContract = () => new Contract(settings.wsethAddress!, artifact.abi, p
 
 /** Each builder returns an unsigned request; quote() and send() then work the same for all of them. */
 export const build = {
-  native: async (to: string, amount: string): Promise<TransactionRequest> => ({ to: toAddress(to), value: toUnits(amount, 18) }),
+  native: async (to: string, amount: string): Promise<TransactionRequest> => ({ to: await resolveRecipient(to), value: toUnits(amount, 18) }),
   token: async (t: Token, to: string, amount: string) =>
-    new Contract(t.address, ERC20_ABI, provider).transfer.populateTransaction(toAddress(to), toUnits(amount, t.decimals)),
+    new Contract(t.address, ERC20_ABI, provider).transfer.populateTransaction(await resolveRecipient(to), toUnits(amount, t.decimals)),
   wrap: async (amount: string) => wsethContract().deposit.populateTransaction({ value: toUnits(amount, 18) }),
   unwrap: async (amount: string) => wsethContract().withdraw.populateTransaction(toUnits(amount, 18)),
 };
@@ -215,14 +254,34 @@ export interface Quote {
   fee: bigint; // worst-case network fee in wei
 }
 
+export type Speed = 'slow' | 'normal' | 'fast';
+const SPEED_BPS: Record<Speed, bigint> = { slow: 80n, normal: 100n, fast: 150n };
+
+function scaleFee(v: bigint | null | undefined, bps: bigint) {
+  if (v == null) return undefined;
+  const n = (v * bps) / 100n;
+  return n > 0n ? n : 1n;
+}
+
 /** Estimates gas (this also simulates the call, so most failures show up here, before signing). */
-export async function quote(request: TransactionRequest): Promise<Quote> {
+export async function quote(request: TransactionRequest, speed: Speed = 'normal'): Promise<Quote> {
   const s = requireSigner();
   const req = { ...request, from: s.address };
   const [gas, feeData] = await Promise.all([s.estimateGas(req), provider!.getFeeData()]);
   const gasLimit = (gas * 12n) / 10n; // 20% headroom
-  const price = feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n;
-  return { request: { ...req, gasLimit }, gasLimit, fee: gasLimit * price };
+  const bps = SPEED_BPS[speed];
+  const maxFeePerGas = scaleFee(feeData.maxFeePerGas, bps);
+  const maxPriorityFeePerGas = scaleFee(feeData.maxPriorityFeePerGas, bps);
+  const gasPrice = scaleFee(feeData.gasPrice, bps);
+  const price = maxFeePerGas ?? gasPrice ?? 0n;
+  const priced: TransactionRequest = { ...req, gasLimit };
+  if (maxFeePerGas) {
+    priced.maxFeePerGas = maxFeePerGas;
+    if (maxPriorityFeePerGas && maxPriorityFeePerGas <= maxFeePerGas) priced.maxPriorityFeePerGas = maxPriorityFeePerGas;
+  } else if (gasPrice) {
+    priced.gasPrice = gasPrice;
+  }
+  return { request: priced, gasLimit, fee: gasLimit * price };
 }
 
 export const send = (q: Quote) => requireSigner().sendTransaction(q.request);
@@ -322,10 +381,11 @@ export async function clearPin() {
 }
 
 /** Largest native amount that can be sent while leaving room for the fee (and L2 data fees). */
-export async function maxNative(): Promise<string> {
+export async function maxNative(speed: Speed = 'normal'): Promise<string> {
   const s = requireSigner();
   const [bal, feeData] = await Promise.all([provider!.getBalance(s.address), provider!.getFeeData()]);
-  const fee = 21000n * (feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n);
+  const unit = ((feeData.maxFeePerGas ?? feeData.gasPrice ?? 0n) * SPEED_BPS[speed]) / 100n;
+  const fee = 21000n * unit;
   const reserve = fee * 2n > parseEther('0.00005') ? fee * 2n : parseEther('0.00005');
   return bal > reserve ? formatEther(bal - reserve) : '0';
 }

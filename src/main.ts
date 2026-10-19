@@ -22,6 +22,7 @@ const state = {
   accounts: [] as string[],
   incoming: [] as w.ChainActivity[],
   draft: { to: '', amount: '' },
+  speed: 'normal' as w.Speed,
 };
 
 // ---------- helpers ----------
@@ -38,7 +39,15 @@ const badge = () => (net().chainId === 1n ? '<span class="tag main">MAINNET</spa
 const sym = (t: Token | null) => (t ? t.symbol : net().nativeSymbol);
 const lookalikeBadge = (t: Token) => (isLookalike(t) ? ` <span class="bad">⚠ lookalike</span>` : '');
 const APP_LINK = 'https://transrock14-hub.github.io/hanan-wallet/';
+const STABLES = new Set([
+  '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+  '0xdac17f958d2ee523a2206206994597c13d831ec7',
+  '0x6b175474e89094c44da98b954eedeac495271d0f',
+]);
 let ethUsd: number | null = null;
+let tokenUsd = new Map<string, number>();
+
+const money = (usd: number) => `$${usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
 const timeAgo = (t: number) => {
   const s = Math.round((Date.now() - t) / 1000);
@@ -127,7 +136,7 @@ function actionForm() {
     <label>Amount (${esc(unit)})</label>
     <div class="row"><input id="amt" inputmode="decimal" placeholder="0.01" value="${esc(state.draft.amount)}">${max ? `<button class="secondary grow0" id="max">Max</button>` : ''}</div>`;
   if (state.tab !== 'send' && !hasW) return `<p class="muted">Set up WSETH for ${esc(net().name)} in Settings first (deploy it or paste its address).</p>`;
-  const feeLine = `<p class="muted fee" id="fee">Enter an amount to estimate the network fee.</p>`;
+  const feeLine = `<label>Speed</label>${select('speed', [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']], state.speed)}<p class="muted fee" id="fee">Enter an amount to estimate the network fee.</p>`;
   if (state.tab === 'wrap')
     return `<p class="muted">Locks ${esc(net().nativeSymbol)} in the contract and gives you the same amount of WSETH.</p>${amountRow(net().nativeSymbol, false)}${feeLine}<button class="full" id="go">Review wrap</button>`;
   if (state.tab === 'unwrap')
@@ -194,7 +203,8 @@ function assetRows() {
   return list
     .map((h) => {
       const name = sym(h.token);
-      return `<div class="asset"><span class="badge">${esc(name.slice(0, 1))}</span><span class="asset-name">${esc(name)}${h.token ? lookalikeBadge(h.token) : ''}<br><span class="muted">${h.token ? short(h.token.address) : esc(net().name)}</span></span><b class="num">${fmt(h.balance)}</b></div>`;
+      const usd = holdingUsd(h);
+      return `<div class="asset"><span class="badge">${esc(name.slice(0, 1))}</span><span class="asset-name">${esc(name)}${h.token ? lookalikeBadge(h.token) : ''}<br><span class="muted">${h.token ? short(h.token.address) : esc(net().name)}</span></span><b class="num">${fmt(h.balance)}${usd ? `<br><span class="muted">${usd}</span>` : ''}</b></div>`;
     })
     .join('');
 }
@@ -433,12 +443,19 @@ function renderHome() {
     };
   const contactSel = $opt<HTMLSelectElement>('#contact');
   if (contactSel) contactSel.onchange = () => contactSel.value && ($<HTMLInputElement>('#to').value = contactSel.value);
+  const speedSel = $opt<HTMLSelectElement>('#speed');
+  if (speedSel)
+    speedSel.onchange = () => {
+      saveDraft();
+      state.speed = speedSel.value as w.Speed;
+      renderHome();
+    };
   const maxBtn = $opt<HTMLButtonElement>('#max');
   if (maxBtn)
     maxBtn.onclick = async () => {
       const cur = sendable().find((a) => a.id === state.asset)!;
       try {
-        $<HTMLInputElement>('#amt').value = cur.token ? (cur.balance ?? '0') : await w.maxNative();
+        $<HTMLInputElement>('#amt').value = cur.token ? (cur.balance ?? '0') : await w.maxNative(state.speed);
       } catch (e) {
         setMsg('err', w.explain(e));
         renderHome();
@@ -478,8 +495,9 @@ function bindFee() {
         const cur = sendable().find((a) => a.id === state.asset)!;
         request = cur.token ? await w.build.token(cur.token, state.draft.to, state.draft.amount) : await w.build.native(state.draft.to, state.draft.amount);
       }
-      const q = await w.quote(request);
-      if ($opt('#fee') === fee) fee.textContent = `Network fee ≈ ${w.formatFee(q.fee)}`;
+      const q = await w.quote(request, state.speed);
+      const usd = feeUsd(q.fee);
+      if ($opt('#fee') === fee) fee.textContent = `Network fee ≈ ${w.formatFee(q.fee)}${usd ? ` · ${usd}` : ''}`;
     } catch (e) {
       if ($opt('#fee') === fee) fee.textContent = w.explain(e);
     }
@@ -592,16 +610,18 @@ async function review() {
       label = summary = `Unwrap ${amount} WSETH → ${net().nativeSymbol}`;
     } else {
       const cur = sendable().find((a) => a.id === state.asset)!;
-      request = cur.token ? await w.build.token(cur.token, to, amount) : await w.build.native(to, amount);
-      const who = contactName(to);
-      label = `Send ${amount} ${sym(cur.token)} to ${who ?? short(to)}`;
-      summary = `Send ${amount} ${sym(cur.token)}\nTo: ${who ? `${who}\n` : ''}${to}`;
+      const dest = await w.resolveRecipient(to);
+      request = cur.token ? await w.build.token(cur.token, dest, amount) : await w.build.native(dest, amount);
+      const who = contactName(dest) || (dest.toLowerCase() !== to.toLowerCase() ? to : null);
+      label = `Send ${amount} ${sym(cur.token)} to ${who ?? short(dest)}`;
+      summary = `Send ${amount} ${sym(cur.token)}\nTo: ${who ? `${who}\n` : ''}${dest}`;
     }
-    const q = await w.quote(request);
+    const q = await w.quote(request, state.speed);
     state.busy = false;
     state.msg = null;
     renderHome();
-    if (!(await askConfirm(`${summary}\n\nNetwork: ${net().name}\nMax network fee: ≈ ${w.formatFee(q.fee)}\n\nConfirm?`))) return;
+    const usd = feeUsd(q.fee);
+    if (!(await askConfirm(`${summary}\n\nNetwork: ${net().name}\nSpeed: ${state.speed}\nMax network fee: ≈ ${w.formatFee(q.fee)}${usd ? ` (${usd})` : ''}\n\nConfirm?`))) return;
     await track(label, q);
     state.draft = { to: '', amount: '' };
     state.view = 'dash';
@@ -624,7 +644,9 @@ async function track(label: string, q: w.Quote) {
     const r = await tx.wait();
     rec.status = r?.status === 1 ? 'confirmed' : 'failed';
     upsertHistory(addr, rec);
-    setMsg(rec.status === 'confirmed' ? 'ok' : 'err', rec.status === 'confirmed' ? 'Confirmed.' : 'Transaction failed on-chain.');
+    const url = explorerTx(tx.hash);
+    if (rec.status === 'confirmed' && url) setMsg('ok', `Confirmed. <a href="${esc(url)}">View transaction</a>`, true);
+    else setMsg(rec.status === 'confirmed' ? 'ok' : 'err', rec.status === 'confirmed' ? 'Confirmed.' : 'Transaction failed on-chain.');
   } catch (e) {
     setMsg('err', w.explain(e));
   } finally {
@@ -645,25 +667,55 @@ async function settlePending() {
   }
 }
 
+function feeUsd(wei: bigint) {
+  if (net().chainId !== 1n || ethUsd == null) return '';
+  return money((Number(wei) / 1e18) * ethUsd);
+}
+
+function holdingUsd(h: w.Holding) {
+  if (net().chainId !== 1n || h.balance == null) return '';
+  const n = Number(h.balance);
+  if (!Number.isFinite(n)) return '';
+  if (!h.token) return ethUsd == null ? '' : money(n * ethUsd);
+  const px = STABLES.has(h.token.address.toLowerCase()) ? 1 : tokenUsd.get(h.token.address.toLowerCase());
+  return px == null ? '' : money(n * px);
+}
+
 function usdLine(bal: string | null) {
   if (net().chainId !== 1n || ethUsd == null || bal == null) return '';
   const n = Number(bal);
   if (!Number.isFinite(n)) return '';
-  return `<div class="muted">≈ $${(n * ethUsd).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>`;
+  return `<div class="muted">≈ ${money(n * ethUsd)}</div>`;
 }
 
 async function refreshPrice() {
   if (net().chainId !== 1n) {
     ethUsd = null;
+    tokenUsd = new Map();
     return;
   }
   try {
     const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
-    if (!res.ok) return;
-    const data = (await res.json()) as { ethereum?: { usd?: number } };
-    ethUsd = data.ethereum?.usd ?? null;
+    if (res.ok) {
+      const data = (await res.json()) as { ethereum?: { usd?: number } };
+      ethUsd = data.ethereum?.usd ?? null;
+    }
   } catch {
     /* The balance still shows without a dollar price. */
+  }
+  const addrs = listTokens()
+    .map((t) => t.address.toLowerCase())
+    .filter((a) => !STABLES.has(a));
+  if (!addrs.length) return;
+  try {
+    const res = await fetch(`https://api.coingecko.com/api/v3/simple/token_price/ethereum?contract_addresses=${addrs.join(',')}&vs_currencies=usd`);
+    if (!res.ok) return;
+    const data = (await res.json()) as Record<string, { usd?: number }>;
+    const next = new Map<string, number>();
+    for (const [addr, row] of Object.entries(data)) if (row?.usd != null) next.set(addr.toLowerCase(), row.usd);
+    tokenUsd = next;
+  } catch {
+    /* Token balances still show without a dollar price. */
   }
 }
 
@@ -711,8 +763,11 @@ async function renderReceive() {
       <button class="full" id="copy">Copy address</button>
     </div>
     <div class="card">
-      <p class="muted" style="margin:0">Scan or share this address to receive ${esc(net().nativeSymbol)} or tokens on <b>${esc(net().name)}</b>.
-      The same address works on all the test networks in this app; make sure the sender picks the same network.</p>
+      <p class="muted" style="margin:0">${
+        net().chainId === 1n
+          ? 'Send real ETH or tokens on Ethereum to this address. Sending from this wallet also needs a little ETH here for the network fee.'
+          : `Scan or share this address to receive ${esc(net().nativeSymbol)} or tokens on <b>${esc(net().name)}</b>. The sender has to use the same network.`
+      }</p>
       <div style="margin-top:12px">${faucetHtml()}</div>
     </div>`;
   $('#back').onclick = () => {
@@ -773,7 +828,7 @@ function renderSettings() {
     <div class="card">
       <h2>Tokens on ${esc(net().name)}</h2>
       ${tokenRows || '<p class="muted">No extra tokens yet.</p>'}
-      ${presetRows ? `<p class="muted" style="margin:10px 0 4px">Official test tokens</p>${presetRows}` : ''}
+      ${presetRows ? `<p class="muted" style="margin:10px 0 4px">Known contracts</p>${presetRows}` : ''}
       <label style="margin-top:10px">Add any token by contract address</label>
       <input id="tokAddr" placeholder="0x…" autocapitalize="off" spellcheck="false">
       <button class="full secondary" id="addTok">Add token</button>
