@@ -486,3 +486,24 @@ a.faucet {
   background: #3a1212;
   color: #ffb4b4;
 }
+
+/* Auto-lock hides balances and addresses underneath. */
+.lock-overlay {
+  background: var(--bg);
+  justify-content: center;
+}
+
+/* Arbitrage setup panel. Four nav tabs need slightly smaller labels on narrow phones. */
+details > summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+details[open] > summary {
+  margin-bottom: 8px;
+}
+
+.nav button {
+  font-size: 14px;
+  white-space: nowrap;
+}

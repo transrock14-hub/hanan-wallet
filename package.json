@@ -1,6 +1,6 @@
 {
   "name": "wseth-wallet",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "Android test wallet for Sepolia ETH and Wrapped Study Ether (WSETH).",
   "type": "module",
@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "sync-contract": "node scripts/sync-contract.mjs",
+    "sync-coin-contract": "node scripts/sync-coin-contract.mjs",
     "android:sync": "npm run build && cap sync android",
     "android:apk": "npm run android:sync && cd android && ./gradlew assembleDebug"
   },

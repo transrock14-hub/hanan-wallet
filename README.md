@@ -9,10 +9,32 @@ send SepoliaETH and wrap, unwrap and send Wrapped Study Ether (WSETH), the contr
   a key held in the Android Keystore. Android cloud backup is disabled for the app.
 - Before using a WSETH address, the app checks that it is a contract named
   "Wrapped Study Ether" / "WSETH".
-- Holds and sends any ERC-20 token on Sepolia (Settings → Tokens). Circle's test USDC and
-  Chainlink's test LINK are built-in presets; other tokens are added by contract address, with
-  name, symbol and decimals read from the contract. A token that uses a famous symbol (USDT,
-  USDC, ETH, …) from an address that isn't the known one is marked "⚠ lookalike".
+- Holds and sends any ERC-20 token on the selected network (Settings → Tokens). Ethereum
+  mainnet is available for sending real ETH and tokens; the app warns before irreversible
+  mainnet sends and token-contract deployment. Learning-token contracts can be deployed on
+  mainnet, which spends real ETH on gas; they are not real-world assets and have no guaranteed
+  value. Circle's test USDC
+  and Chainlink's test LINK are built-in presets; other tokens are added by contract address,
+  with name, symbol and decimals read from the contract. A token that uses a famous symbol
+  (USDT, USDC, ETH, …) from an address that isn't the known one is marked "⚠ lookalike".
+
+Real networks (mainnets), each with its common coins added on first use (every contract address,
+symbol and decimals value checked on-chain):
+
+| Network | Native coin | Common coins |
+|---|---|---|
+| Ethereum | ETH | USDT, USDC, DAI, WBTC, cbBTC, WETH, LINK |
+| BNB Smart Chain | BNB | USDT, USDC, ETH, BTCB, WBNB (BEP20) |
+| Polygon | POL | USDT0, USDC, WETH, WBTC |
+| Base | ETH | USDC, DAI, cbBTC, WETH |
+| Arbitrum One | ETH | USD₮0, USDC, WBTC, WETH, ARB |
+| OP Mainnet | ETH | USDT, USDC, WETH, OP |
+| Avalanche C-Chain | AVAX | USDt, USDC, BTC.b, WETH.e |
+
+These are the official contracts, so MetaMask, Trust Wallet, Coinbase Wallet and Binance Wallet
+show them to recipients without importing (when the recipient's wallet has that network enabled).
+One address works on every network, but each network keeps its own balance, and a send must use the
+network the recipient expects (for example BEP20 for many Binance deposits).
 
 Since v1.3:
 
@@ -24,8 +46,44 @@ Since v1.3:
 - **Address book** for saved recipients, usable from the Send form.
 - **Multiple accounts** from the same recovery phrase (BIP-44 index 0, 1, 2, …).
 - **Saved activity history** per network and account; pending transactions are re-checked on refresh.
+- **ERC-20 approvals and delegated transfers** for tokens that support `approve` and `transferFrom`.
+  Newly deployed learning tokens also expose allowances and owner-only minting; the initial supply
+  is scaled to 18 decimals.
+- **Incoming token discovery** on networks with a configured Blockscout-compatible token index.
+  Hanan Wallet verifies metadata from the contract and adds received assets automatically; unknown
+  contracts may still be malicious. Other wallet apps control their own discovery and may require
+  the token contract address to be imported manually.
+- **Show in other wallets:** after a coin is created (or from Settings → Tokens → Share), the app shows
+  the contract address as text and QR, a Trust Wallet add-token link on Ethereum, and import steps for
+  MetaMask and Binance Wallet. Those wallets show the coin once its contract address is imported on
+  the same network.
 
-Use it with test funds only, and don't import the recovery phrase of a wallet that holds real funds.
+Use it with test funds only unless you intentionally select Ethereum mainnet. Mainnet transactions
+spend real funds and cannot be reversed. Never import a recovery phrase for a wallet holding funds
+unless you understand that this app controls those keys.
+
+Learning tokens can use custom names and symbols, but names and tickers matching major real assets
+are reserved to reduce impersonation. A token's contract address, not its name or symbol, identifies it.
+
+## Arbitrage (from flash-arb)
+
+The **Arbitrage** tab runs the flash-loan arbitrage bot from `Flash tool/flash-arb` inside the wallet,
+signed by the active account instead of a `PRIVATE_KEY` in `.env`:
+
+- **Scan** quotes every token pair on Uniswap V2, SushiSwap and Uniswap V3 (best fee tier), prices each
+  round trip net of the Aave flash-loan fee and gas, and lists them best first. "Scan every 15 seconds"
+  keeps watching while the screen is open; "Execute automatically" sends the best profitable one.
+- **Execute** runs the bot's pipeline: Aave liquidity check, `eth_call` simulation (decoded revert
+  reasons), gas estimate, worst-case-gas profit check, then a confirmation (and PIN on mainnet).
+- **Deploy** puts `FlashLoanArbitrage` on the current network, owned by the active account, and approves
+  the configured routers. Profit stays in the contract until **Withdraw**.
+- **Practice market** (test networks and the hosted Anvil chain only) deploys practice tokens pUSD and
+  pETH, a stand-in Aave pool and two DEXes priced 2% apart, so the whole flow can be seen working.
+- **Setup** holds the bot's `.env` values per network. Sepolia and Ethereum come pre-filled with Aave V3,
+  Uniswap and SushiSwap addresses checked on-chain on 2026-10-25.
+
+The contract is unaudited. On mainnet, professional bots take most spreads first, and a reverted
+attempt still costs gas.
 
 ## Install on your phone
 
